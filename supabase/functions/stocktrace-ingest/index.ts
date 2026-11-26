@@ -30,10 +30,10 @@ let d:any;let last="unknown";let source="GDELT";const sid=Number(u.searchParams.
 if(kind==="news"&&sid===1&&/^(apple|aapl)$/i.test(u.searchParams.get("term")||"")){
 try{const base=Deno.env.get("SUPABASE_URL"),key=secret||legacy;
 const cr=await fetch(base+"/rest/v1/news?publisher=eq.Apple%20Newsroom&collected_at=gte."+encodeURIComponent(new Date(Date.now()-3600000).toISOString())+"&published_at=not.is.null&select=id",{headers:{apikey:key!,...(secret?{}:{Authorization:"Bearer "+key})},signal:AbortSignal.timeout(5000)});
-if(cr.ok){const cached=await cr.json();if(cached.length&&u.searchParams.get("save")==="1")return json({provider:"news",source:"Apple Newsroom",cached:true,saved:0,available:cached.length});}
+if(cr.ok){const cached=await cr.json();if(cached.length>=20&&u.searchParams.get("save")==="1"&&u.searchParams.get("refresh")!=="1")return json({provider:"news",source:"Apple Newsroom",cached:true,saved:0,available:cached.length});}
 }catch{}
 try{const rr=await fetch("https://www.apple.com/newsroom/rss-feed.rss",{signal:AbortSignal.timeout(12000),redirect:"error"});if(rr.ok){const xml=await rr.text();const decode=(s:string)=>s.replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&apos;/g,"'");
-const articles=[...xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/g)].slice(0,25).map(m=>{const b=m[1];const title=decode((b.match(/<title\b[^>]*>([\s\S]*?)<\/title>/)?.[1]||"").replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/,"$1")).trim();const url=decode(b.match(/<link\b[^>]*href=["']([^"']+)["']/)?.[1]||"");const date=b.match(/<published\b[^>]*>([^<]+)<\/published>/)?.[1]?.trim()||b.match(/<pubDate\b[^>]*>([^<]+)<\/pubDate>/i)?.[1]?.trim()||"";return {title,url,domain:"Apple Newsroom",published_iso:date};}).filter(a=>a.title&&a.url.startsWith("https://www.apple.com/newsroom/"));if(articles.length){d={articles};source="Apple Newsroom";}}}catch{}
+const articles=[...xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/g)].slice(0,25).map(m=>{const b=m[1];const title=decode((b.match(/<title\b[^>]*>([\s\S]*?)<\/title>/)?.[1]||"").replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/,"$1")).trim();const url=decode(b.match(/<link\b[^>]*href=["']([^"']+)["']/)?.[1]||"");const date=(b.match(/<(?:published|pubDate|dc:date)\b[^>]*>([\s\S]*?)<\/(?:published|pubDate|dc:date)>/i)?.[1]||"").replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/,"$1").trim();return {title,url,domain:"Apple Newsroom",published_iso:date};}).filter(a=>a.title&&a.url.startsWith("https://www.apple.com/newsroom/"));if(articles.length){d={articles};source="Apple Newsroom";}}}catch{}
 }
 
 for(let attempt=0;!d&&attempt<(kind==="news"?2:1);attempt++){
@@ -69,7 +69,7 @@ if(kind==="news"){table="news";conflict="source_url";rows=(d.articles||[]).filte
 if(kind==="dart"||kind==="sec")return json({error:"filing identity mapping not yet configured"},501);
 rows=[...new Map(rows.map(x=>[x.source_url+(x.trading_date||""),x])).values()];
 if(rows.length){const wr=await fetch(base+"/rest/v1/"+table+"?on_conflict="+conflict,{method:"POST",headers:h,body:JSON.stringify(rows)});if(!wr.ok)return json({error:"database write failed",status:wr.status},502);}
-return json({provider:kind,source:kind==="news"?source:kind,saved:rows.length});
+return json({provider:kind,source:kind==="news"?source:kind,saved:rows.length,...(kind==="news"?{dated:rows.filter(x=>x.published_at).length,missing_dates:rows.filter(x=>!x.published_at).length}:{})});
 }
 return json({provider:kind,collected_at:new Date().toISOString(),data:kind==="news"?(d.articles||[]).map((a:any)=>({title:a.title,url:a.url,domain:a.domain,seen_at:a.seendate,language:a.language})):d});
 }catch{return json({error:"upstream unavailable"},502);}
