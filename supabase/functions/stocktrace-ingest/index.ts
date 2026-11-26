@@ -26,8 +26,17 @@ target=new URL("https://opendart.fss.or.kr/api/list.json");target.search=new URL
 const term=u.searchParams.get("term")||"";if(!/^[\p{L}\p{N} .&-]{3,80}$/u.test(term))return json({error:"invalid term"},400);
 target=new URL("https://api.gdeltproject.org/api/v2/doc/doc");target.search=new URLSearchParams({query:'"'+term+'"',mode:"artlist",format:"json",maxrecords:"25",timespan:"7d"}).toString();
 }else return json({error:"unknown kind"},400);
-let d:any;let last="unknown";
-for(let attempt=0;attempt<(kind==="news"?2:1);attempt++){
+let d:any;let last="unknown";let source="GDELT";const sid=Number(u.searchParams.get("stock_id"));
+if(kind==="news"&&sid===1&&/^(apple|aapl)$/i.test(u.searchParams.get("term")||"")){
+try{const base=Deno.env.get("SUPABASE_URL"),key=secret||legacy;
+const cr=await fetch(base+"/rest/v1/news?publisher=eq.Apple%20Newsroom&collected_at=gte."+encodeURIComponent(new Date(Date.now()-3600000).toISOString())+"&select=id",{headers:{apikey:key!,...(secret?{}:{Authorization:"Bearer "+key})},signal:AbortSignal.timeout(5000)});
+if(cr.ok){const cached=await cr.json();if(cached.length&&u.searchParams.get("save")==="1")return json({provider:"news",source:"Apple Newsroom",cached:true,saved:0,available:cached.length});}
+}catch{}
+try{const rr=await fetch("https://www.apple.com/newsroom/rss-feed.rss",{signal:AbortSignal.timeout(12000),redirect:"error"});if(rr.ok){const xml=await rr.text();const decode=(s:string)=>s.replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&apos;/g,"'");
+const articles=[...xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/g)].slice(0,25).map(m=>{const b=m[1];const title=decode(b.match(/<title\b[^>]*>([\s\S]*?)<\/title>/)?.[1]||"");const url=decode(b.match(/<link\b[^>]*href=["']([^"']+)["']/)?.[1]||"");const date=b.match(/<published>([^<]+)<\/published>/)?.[1]||"";return {title,url,domain:"Apple Newsroom",published_iso:date};}).filter(a=>a.title&&a.url.startsWith("https://www.apple.com/newsroom/"));if(articles.length){d={articles};source="Apple Newsroom";}}}catch{}
+}
+
+for(let attempt=0;!d&&attempt<(kind==="news"?2:1);attempt++){
 try{
 const r=await fetch(target,{headers:{...headers,Accept:"application/json"},signal:AbortSignal.timeout(kind==="news"?25000:12000),redirect:"error"});
 if(!r.ok){last="HTTP "+r.status;if(r.status===429||r.status<500)break;}else{d=await r.json();if(kind!=="news"||Array.isArray(d.articles))break;d=undefined;last="invalid news response";}
@@ -41,7 +50,7 @@ const ticker=mapped[id];const ak=Deno.env.get("ALPHA_VANTAGE_KEY");
 if(ticker&&ak){try{
 const alt=new URL("https://www.alphavantage.co/query");alt.search=new URLSearchParams({function:"NEWS_SENTIMENT",tickers:ticker,limit:"25",apikey:ak}).toString();
 const ar=await fetch(alt,{signal:AbortSignal.timeout(12000),redirect:"error"});
-if(ar.ok){const a=await ar.json();if(Array.isArray(a.feed)){d={articles:a.feed.filter((x:any)=>x.ticker_sentiment?.some((t:any)=>t.ticker===ticker)).map((x:any)=>({title:x.title,url:x.url,domain:x.source, published:x.time_published}))};last="Alpha Vantage";}}
+if(ar.ok){const a=await ar.json();if(Array.isArray(a.feed)){d={articles:a.feed.filter((x:any)=>x.ticker_sentiment?.some((t:any)=>t.ticker===ticker)).map((x:any)=>({title:x.title,url:x.url,domain:x.source, published:x.time_published}))};last="Alpha Vantage";source="Alpha Vantage";}}
 }catch{last+="; fallback unavailable";}}
 }
 if(!d)return json({error:"upstream unavailable",provider:kind,detail:last},502);
@@ -56,11 +65,11 @@ const sr=await fetch(base+"/rest/v1/stocks?id=eq."+stockId,{headers:h});if(!sr.o
 const stock=(await sr.json())[0];if(!stock)return json({error:"unknown stock"},404);
 let table="",conflict="",rows:any[]=[];
 if(kind==="price"){if(stock.symbol!==symbol||stock.country!=="US")return json({error:"symbol mismatch"},400);table="stock_prices";conflict="stock_id,trading_date";rows=Object.entries(d["Time Series (Daily)"]).map(([date,v]:[string,any])=>({stock_id:stockId,trading_date:date,open:Number(v["1. open"]),high:Number(v["2. high"]),low:Number(v["3. low"]),close:Number(v["4. close"]),volume:Number(v["5. volume"]),source_url:"https://www.alphavantage.co/documentation/",data_kind:"historical",collected_at:new Date().toISOString()}));}
-if(kind==="news"){table="news";conflict="source_url";rows=(d.articles||[]).filter((a:any)=>a.title&&/^https?:\/\//.test(a.url)).map((a:any)=>({title:a.title,publisher:a.domain||"Unknown",source_url:a.url,published_at:typeof a.published==="string"&&/^\d{8}T\d{6}$/.test(a.published)?a.published.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/,"$1-$2-$3T$4:$5:$6Z"):null,collected_at:new Date().toISOString(),is_demo:false}));}
+if(kind==="news"){table="news";conflict="source_url";rows=(d.articles||[]).filter((a:any)=>a.title&&/^https?:\/\//.test(a.url)).map((a:any)=>({title:a.title,publisher:a.domain||"Unknown",source_url:a.url,category:a.domain==="Apple Newsroom"?"company_release":null,published_at:a.published_iso&&Number.isFinite(Date.parse(a.published_iso))?new Date(a.published_iso).toISOString():typeof a.published==="string"&&/^\d{8}T\d{6}$/.test(a.published)?a.published.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/,"$1-$2-$3T$4:$5:$6Z"):null,collected_at:new Date().toISOString(),is_demo:false}));}
 if(kind==="dart"||kind==="sec")return json({error:"filing identity mapping not yet configured"},501);
 rows=[...new Map(rows.map(x=>[x.source_url+(x.trading_date||""),x])).values()];
 if(rows.length){const wr=await fetch(base+"/rest/v1/"+table+"?on_conflict="+conflict,{method:"POST",headers:h,body:JSON.stringify(rows)});if(!wr.ok)return json({error:"database write failed",status:wr.status},502);}
-return json({provider:kind,saved:rows.length});
+return json({provider:kind,source:kind==="news"?source:kind,saved:rows.length});
 }
 return json({provider:kind,collected_at:new Date().toISOString(),data:kind==="news"?(d.articles||[]).map((a:any)=>({title:a.title,url:a.url,domain:a.domain,seen_at:a.seendate,language:a.language})):d});
 }catch{return json({error:"upstream unavailable"},502);}
