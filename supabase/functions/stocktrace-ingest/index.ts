@@ -1,6 +1,10 @@
 Deno.serve(async(req)=>{
 const json=(data:unknown,status=200)=>new Response(JSON.stringify(data),{status,headers:{"Content-Type":"application/json","Cache-Control":"no-store"}});
-if(req.headers.get("Authorization")!== "Bearer "+Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || !Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))return json({error:"Forbidden"},403);
+const legacy=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+let secret:string|undefined;try{secret=JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS")||"{}").default;}catch{}
+const supplied=req.headers.get("apikey");
+const authorized=(typeof secret==="string"&&secret.startsWith("sb_secret_")&&supplied===secret)||(!!legacy&&req.headers.get("Authorization")==="Bearer "+legacy);
+if(!authorized)return json({error:"Forbidden"},403);
 if(req.method!=="GET")return json({error:"GET only"},405);
 const u=new URL(req.url),kind=u.searchParams.get("kind");
 if(kind==="health")return json({ok:true,providers:{price:!!Deno.env.get("ALPHA_VANTAGE_KEY"),dart:!!Deno.env.get("DART_API_KEY"),sec:!!Deno.env.get("SEC_CONTACT"),news:true}});
@@ -28,8 +32,8 @@ if(kind==="dart"&&d.status!=="000"&&d.status!=="013")return json({error:"DART un
 const stockId=Number(u.searchParams.get("stock_id"));
 if(u.searchParams.get("save")==="1"){
 if(!Number.isSafeInteger(stockId)||stockId<1)return json({error:"stock_id required"},400);
-const base=Deno.env.get("SUPABASE_URL"),key=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-const h={"apikey":key!,"Authorization":"Bearer "+key,"Content-Type":"application/json","Prefer":"resolution=merge-duplicates,return=minimal"};
+const base=Deno.env.get("SUPABASE_URL"),key=secret||legacy;
+const h={"apikey":key!,...(secret?{}:{"Authorization":"Bearer "+key}),"Content-Type":"application/json","Prefer":"resolution=merge-duplicates,return=minimal"};
 const sr=await fetch(base+"/rest/v1/stocks?id=eq."+stockId,{headers:h});if(!sr.ok)return json({error:"stock lookup failed"},502);
 const stock=(await sr.json())[0];if(!stock)return json({error:"unknown stock"},404);
 let table="",conflict="",rows:any[]=[];
