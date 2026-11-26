@@ -29,11 +29,11 @@ target=new URL("https://api.gdeltproject.org/api/v2/doc/doc");target.search=new 
 let d:any;let last="unknown";let source="GDELT";const sid=Number(u.searchParams.get("stock_id"));
 if(kind==="news"&&sid===1&&/^(apple|aapl)$/i.test(u.searchParams.get("term")||"")){
 try{const base=Deno.env.get("SUPABASE_URL"),key=secret||legacy;
-const cr=await fetch(base+"/rest/v1/news?publisher=eq.Apple%20Newsroom&collected_at=gte."+encodeURIComponent(new Date(Date.now()-3600000).toISOString())+"&select=id",{headers:{apikey:key!,...(secret?{}:{Authorization:"Bearer "+key})},signal:AbortSignal.timeout(5000)});
+const cr=await fetch(base+"/rest/v1/news?publisher=eq.Apple%20Newsroom&collected_at=gte."+encodeURIComponent(new Date(Date.now()-3600000).toISOString())+"&published_at=not.is.null&select=id",{headers:{apikey:key!,...(secret?{}:{Authorization:"Bearer "+key})},signal:AbortSignal.timeout(5000)});
 if(cr.ok){const cached=await cr.json();if(cached.length&&u.searchParams.get("save")==="1")return json({provider:"news",source:"Apple Newsroom",cached:true,saved:0,available:cached.length});}
 }catch{}
 try{const rr=await fetch("https://www.apple.com/newsroom/rss-feed.rss",{signal:AbortSignal.timeout(12000),redirect:"error"});if(rr.ok){const xml=await rr.text();const decode=(s:string)=>s.replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&apos;/g,"'");
-const articles=[...xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/g)].slice(0,25).map(m=>{const b=m[1];const title=decode(b.match(/<title\b[^>]*>([\s\S]*?)<\/title>/)?.[1]||"");const url=decode(b.match(/<link\b[^>]*href=["']([^"']+)["']/)?.[1]||"");const date=b.match(/<published>([^<]+)<\/published>/)?.[1]||"";return {title,url,domain:"Apple Newsroom",published_iso:date};}).filter(a=>a.title&&a.url.startsWith("https://www.apple.com/newsroom/"));if(articles.length){d={articles};source="Apple Newsroom";}}}catch{}
+const articles=[...xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/g)].slice(0,25).map(m=>{const b=m[1];const title=decode((b.match(/<title\b[^>]*>([\s\S]*?)<\/title>/)?.[1]||"").replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/,"$1")).trim();const url=decode(b.match(/<link\b[^>]*href=["']([^"']+)["']/)?.[1]||"");const date=b.match(/<published\b[^>]*>([^<]+)<\/published>/)?.[1]?.trim()||b.match(/<pubDate\b[^>]*>([^<]+)<\/pubDate>/i)?.[1]?.trim()||"";return {title,url,domain:"Apple Newsroom",published_iso:date};}).filter(a=>a.title&&a.url.startsWith("https://www.apple.com/newsroom/"));if(articles.length){d={articles};source="Apple Newsroom";}}}catch{}
 }
 
 for(let attempt=0;!d&&attempt<(kind==="news"?2:1);attempt++){
