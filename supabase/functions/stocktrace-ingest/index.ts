@@ -26,8 +26,16 @@ target=new URL("https://opendart.fss.or.kr/api/list.json");target.search=new URL
 const term=u.searchParams.get("term")||"";if(!/^[\p{L}\p{N} .&-]{3,80}$/u.test(term))return json({error:"invalid term"},400);
 target=new URL("https://api.gdeltproject.org/api/v2/doc/doc");target.search=new URLSearchParams({query:'"'+term+'"',mode:"artlist",format:"json",maxrecords:"25",timespan:"7d"}).toString();
 }else return json({error:"unknown kind"},400);
-const r=await fetch(target,{headers,signal:AbortSignal.timeout(12000),redirect:"error"});if(!r.ok)return json({error:"upstream failure",status:r.status},502);
-const d=await r.json();if(kind==="price"&&!d["Time Series (Daily)"])return json({error:"price unavailable or quota exceeded"},502);
+let d:any;let last="unknown";
+for(let attempt=0;attempt<(kind==="news"?2:1);attempt++){
+try{
+const r=await fetch(target,{headers:{...headers,Accept:"application/json"},signal:AbortSignal.timeout(kind==="news"?25000:12000),redirect:"error"});
+if(!r.ok){last="HTTP "+r.status;if(r.status!==429&&r.status<500)break;}else{d=await r.json();if(kind!=="news"||Array.isArray(d.articles))break;d=undefined;last="invalid news response";}
+}catch(e){last=e instanceof Error?e.name:"network error";}
+if(attempt===0&&kind==="news")await new Promise(resolve=>setTimeout(resolve,1500));
+}
+if(!d)return json({error:"upstream unavailable",provider:kind,detail:last},502);
+if(kind==="price"&&!d["Time Series (Daily)"])return json({error:"price unavailable or quota exceeded"},502);
 if(kind==="dart"&&d.status!=="000"&&d.status!=="013")return json({error:"DART unavailable",status:d.status},502);
 const stockId=Number(u.searchParams.get("stock_id"));
 if(u.searchParams.get("save")==="1"){
