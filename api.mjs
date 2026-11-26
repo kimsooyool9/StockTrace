@@ -1,0 +1,1 @@
+export async function fetchData(){const r=await fetch("https://xupfgmfvbyeatwrpcsck.supabase.co/functions/v1/stocktrace-read",{signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error("HTTP "+r.status);const d=await r.json();for(const k of ["stocks","prices","news","disclosures","relations"])if(!Array.isArray(d[k]))throw Error("Invalid data");return d;}
