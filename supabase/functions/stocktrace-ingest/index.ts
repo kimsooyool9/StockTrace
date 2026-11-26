@@ -30,9 +30,19 @@ let d:any;let last="unknown";
 for(let attempt=0;attempt<(kind==="news"?2:1);attempt++){
 try{
 const r=await fetch(target,{headers:{...headers,Accept:"application/json"},signal:AbortSignal.timeout(kind==="news"?25000:12000),redirect:"error"});
-if(!r.ok){last="HTTP "+r.status;if(r.status!==429&&r.status<500)break;}else{d=await r.json();if(kind!=="news"||Array.isArray(d.articles))break;d=undefined;last="invalid news response";}
+if(!r.ok){last="HTTP "+r.status;if(r.status===429||r.status<500)break;}else{d=await r.json();if(kind!=="news"||Array.isArray(d.articles))break;d=undefined;last="invalid news response";}
 }catch(e){last=e instanceof Error?e.name:"network error";}
 if(attempt===0&&kind==="news")await new Promise(resolve=>setTimeout(resolve,1500));
+}
+if(!d&&kind==="news"){
+const id=Number(u.searchParams.get("stock_id"));
+const mapped:Record<number,string>={1:"AAPL",2:"MSFT"};
+const ticker=mapped[id];const ak=Deno.env.get("ALPHA_VANTAGE_KEY");
+if(ticker&&ak){try{
+const alt=new URL("https://www.alphavantage.co/query");alt.search=new URLSearchParams({function:"NEWS_SENTIMENT",tickers:ticker,limit:"25",apikey:ak}).toString();
+const ar=await fetch(alt,{signal:AbortSignal.timeout(12000),redirect:"error"});
+if(ar.ok){const a=await ar.json();if(Array.isArray(a.feed)){d={articles:a.feed.filter((x:any)=>x.ticker_sentiment?.some((t:any)=>t.ticker===ticker)).map((x:any)=>({title:x.title,url:x.url,domain:x.source, published:x.time_published}))};last="Alpha Vantage";}}
+}catch{last+="; fallback unavailable";}}
 }
 if(!d)return json({error:"upstream unavailable",provider:kind,detail:last},502);
 if(kind==="price"&&!d["Time Series (Daily)"])return json({error:"price unavailable or quota exceeded"},502);
@@ -46,7 +56,7 @@ const sr=await fetch(base+"/rest/v1/stocks?id=eq."+stockId,{headers:h});if(!sr.o
 const stock=(await sr.json())[0];if(!stock)return json({error:"unknown stock"},404);
 let table="",conflict="",rows:any[]=[];
 if(kind==="price"){if(stock.symbol!==symbol||stock.country!=="US")return json({error:"symbol mismatch"},400);table="stock_prices";conflict="stock_id,trading_date";rows=Object.entries(d["Time Series (Daily)"]).map(([date,v]:[string,any])=>({stock_id:stockId,trading_date:date,open:Number(v["1. open"]),high:Number(v["2. high"]),low:Number(v["3. low"]),close:Number(v["4. close"]),volume:Number(v["5. volume"]),source_url:"https://www.alphavantage.co/documentation/",data_kind:"historical",collected_at:new Date().toISOString()}));}
-if(kind==="news"){table="news";conflict="source_url";rows=(d.articles||[]).filter((a:any)=>a.title&&/^https?:\/\//.test(a.url)).map((a:any)=>({title:a.title,publisher:a.domain||"Unknown",source_url:a.url,collected_at:new Date().toISOString(),is_demo:false}));}
+if(kind==="news"){table="news";conflict="source_url";rows=(d.articles||[]).filter((a:any)=>a.title&&/^https?:\/\//.test(a.url)).map((a:any)=>({title:a.title,publisher:a.domain||"Unknown",source_url:a.url,published_at:typeof a.published==="string"&&/^\d{8}T\d{6}$/.test(a.published)?a.published.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/,"$1-$2-$3T$4:$5:$6Z"):null,collected_at:new Date().toISOString(),is_demo:false}));}
 if(kind==="dart"||kind==="sec")return json({error:"filing identity mapping not yet configured"},501);
 rows=[...new Map(rows.map(x=>[x.source_url+(x.trading_date||""),x])).values()];
 if(rows.length){const wr=await fetch(base+"/rest/v1/"+table+"?on_conflict="+conflict,{method:"POST",headers:h,body:JSON.stringify(rows)});if(!wr.ok)return json({error:"database write failed",status:wr.status},502);}
